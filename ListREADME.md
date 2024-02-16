@@ -138,7 +138,8 @@ ceph osd tree
 
 对于测试，过程如下：
 
-创建一个yaml文件，定义你的测试用例的名称、目的、参数、步骤和预期结果。
-将你的yaml文件放在teuthology的suites目录下，或者在你的git仓库中创建一个suites目录，并将你的yaml文件放在其中。
-使用teuthology-suite命令来运行你的测试用例，指定你的yaml文件的路径和其他选项。
-查看teuthology的web界面，监控你的测试用例的执行状态和结果。
+创建test.yaml文件（该文件路径：teuthology-api-main\.github\workflows\test.yaml），定义测试用例的名称、目的、参数、步骤和预期结果,这一部分在软件测试文档里有说明。
+
+使用teuthology-suite命令来运行测试用例，指定yaml文件的路径和其他选项。
+
+查看teuthology的web界面，监测测试用例的执行状态和结果。
