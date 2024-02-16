@@ -1,0 +1,266 @@
+// 导入 rados 包以及Ceph 的 Java API
+import com.ceph.rados.Rados;
+import com.ceph.rados.exceptions.RadosException;
+import redis.clients.jedis.Jedis;
+import utils.JedisUtils;
+import java.util.Arrays;
+import com.ceph.rbd.Rbd;
+import com.ceph.rbd.RbdImage;
+import com.ceph.fs.CephMount;
+
+// 定义一个测试类
+public class CephDedupTest {
+
+    // 定义一个 rados 对象
+    private static Rados cluster;
+
+    // 定义一个 main 方法
+    public static void main(String[] args) {
+        try {
+            // 创建一个 rados 对象
+            cluster = new Rados("admin");
+            System.out.println("Created cluster handle.");
+
+            // 读取配置文件
+            File f = new File("/etc/ceph/ceph.conf");
+            cluster.confReadFile(f);
+            System.out.println("Read the configuration file.");
+
+            // 连接到集群
+            cluster.connect();
+            System.out.println("Connected to the cluster.");
+
+            // 获取集群的状态信息
+            System.out.println("Cluster ID: " + cluster.getClusterId());
+            System.out.println("Cluster FSID: " + cluster.getFSID());
+            System.out.println("Cluster Status: " + cluster.clusterStat());
+
+            // 获取集群的池列表
+            String[] pools = cluster.poolList();
+            System.out.println("Pools: ");
+            for (String pool : pools) {
+                System.out.println(pool);
+            }
+
+            // 选择一个启用了去重功能的池
+            String poolName = "rbd-dedup-block";
+            System.out.println("Selected pool: " + poolName);
+
+            // 打开一个 io context
+            Rados.IoCTX ioctx = cluster.ioCtxCreate(poolName);
+            System.out.println("Created io context.");
+
+            // 写入一些数据到对象中，模拟不同的数据冗余程度
+            // 全 0 数据
+            byte[] data1 = new byte[4096];
+            ioctx.write("obj1", data1, data1.length, 0);
+            System.out.println("Wrote obj1 with all zeros.");
+
+            // 全 1 数据
+            byte[] data2 = new byte[4096];
+            for (int i = 0; i < data2.length; i++) {
+                data2[i] = (byte) 0xFF;
+            }
+            ioctx.write("obj2", data2, data2.length, 0);
+            System.out.println("Wrote obj2 with all ones.");
+
+            // 随机数据
+            byte[] data3 = new byte[4096];
+            cluster.rand(data3);
+            ioctx.write("obj3", data3, data3.length, 0);
+            System.out.println("Wrote obj3 with random data.");
+
+            // 重复数据
+            byte[] data4 = new byte[4096];
+            for (int i = 0; i < data4.length; i += 4) {
+                data4[i] = (byte) 0xDE;
+                data4[i + 1] = (byte) 0xAD;
+                data4[i + 2] = (byte) 0xBE;
+                data4[i + 3] = (byte) 0xEF;
+            }
+            ioctx.write("obj4", data4, data4.length, 0);
+            System.out.println("Wrote obj4 with repeated data.");
+
+            // 读取对象的数据，验证写入是否成功
+            byte[] readData = new byte[4096];
+            ioctx.read("obj1", readData, readData.length, 0);
+            System.out.println("Read obj1: " + bytesToHex(readData));
+            ioctx.read("obj2", readData, readData.length, 0);
+            System.out.println("Read obj2: " + bytesToHex(readData));
+            ioctx.read("obj3", readData, readData.length, 0);
+            System.out.println("Read obj3: " + bytesToHex(readData));
+            ioctx.read("obj4", readData, readData.length, 0);
+            System.out.println("Read obj4: " + bytesToHex(readData));
+
+            // 获取对象的去重信息，验证去重是否生效
+            System.out.println("Dedup info of obj1: " + ioctx.getDedupInfo("obj1"));
+            System.out.println("Dedup info of obj2: " + ioctx.getDedupInfo("obj2"));
+            System.out.println("Dedup info of obj3: " + ioctx.getDedupInfo("obj3"));
+            System.out.println("Dedup info of obj4: " + ioctx.getDedupInfo("obj4"));
+
+            // 关闭 io context
+            cluster.ioCtxDestroy(ioctx);
+            System.out.println("Destroyed io context.");
+
+            // 断开集群连接
+            cluster.shutdown();
+            System.out.println("Shut down the cluster.");
+
+        } catch (RadosException e) {
+            System.out.println(e.getMessage() + ": " + e.getReturnValue());
+        }
+    }
+
+    // 定义一个辅助方法，将字节数组转换为十六进制字符串
+    private static String bytesToHex(byte[] bytes) {
+        StringBuilder sb = new StringBuilder();
+        for (byte b : bytes) {
+            sb.append(String.format("%02x", b));
+        }
+        return sb.toString();
+    }
+}
+
+public class BloomExample {
+    // 布隆过滤器 key
+    private static final String _KEY = "URLREPEAT_KEY";
+    // 待去重 URL
+    public static final String[] URLS = {"www.apigo.cn", "www.baidu.com", "www.apigo.cn"};
+
+    public static void main(String[] args) {
+        Jedis jedis = JedisUtils.getJedis();
+        for (int i = 0; i < URLS.length; i++) {
+            String url = URLS[i];
+            boolean exists = bfExists(jedis, _KEY, url);
+            if (exists) {
+                // 重复的 URL
+                System.out.println("URL 已存在了：" + url);
+            } else {
+                bfAdd(jedis, _KEY, url);
+            }
+        }
+    }
+
+    /**
+     * 添加元素
+     * @param jedis Redis 客户端
+     * @param key key
+     * @param value value
+     * @return boolean
+     */
+    public static boolean bfAdd(Jedis jedis, String key, String value) {
+        String luaStr = "return redis.call ('bf.add', KEYS, KEYS)";
+        Object result = jedis.eval(luaStr, Arrays.asList(key, value), Arrays.asList());
+        if (result.equals(1L)) {
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * 查询元素是否存在
+     * @param jedis Redis 客户端
+     * @param key key
+     * @param value value
+     * @return boolean
+     */
+    public static boolean bfExists(Jedis jedis, String key, String value) {
+        String luaStr = "return redis.call ('bf.exists', KEYS, KEYS)";
+        Object result = jedis.eval(luaStr, Arrays.asList(key, value), Arrays.asList());
+        if (result.equals(1L)) {
+            return true;
+        }
+        return false;
+    }
+}
+
+// 再创建一个 Ceph 集群对象
+Rados cluster = new Rados("admin");
+cluster.confReadFile(new File("ceph.conf"));
+
+// 连接到 Ceph 集群
+cluster.connect();
+
+// 创建一个文件存储池，使用复制作为数据减少算法
+cluster.poolCreate("file_pool");
+long file_ioctx = cluster.ioCtxCreate("file_pool");
+cluster.confSet("client_mds_namespace", "file_pool");
+
+// 创建一个块存储池，使用纠删码作为数据减少算法
+cluster.poolCreate("block_pool");
+long block_ioctx = cluster.ioCtxCreate("block_pool");
+
+// 创建一个对象存储池，使用纠删码作为数据减少算法
+cluster.poolCreate("object_pool");
+long object_ioctx = cluster.ioCtxCreate("object_pool");
+
+// 创建一个 TiDedup 对象，配置相应的去重参数
+TiDedup tidedup = new TiDedup(cluster);
+tidedup.setDedupGranularity(4 * 1024); // 设置去重粒度为 4KB
+tidedup.setDedupThreshold(0.5); // 设置去重阈值为 0.5
+tidedup.setDedupIndex("bloom"); // 设置去重索引为布隆过滤器
+
+// 创建一个文件系统对象，挂载到文件存储池
+CephMount fs = new CephMount("admin");
+fs.conf_read_file(new File("ceph.conf"));
+fs.mount();
+
+// 创建一个块设备对象，映射到块存储池
+Rbd rbd = new Rbd(block_ioctx);
+rbd.create("block_device", 10 * 1024 * 1024 * 1024); // 创建一个 10GB 的块设备
+RbdImage block_device = rbd.open("block_device");
+
+// 使用 FIO 在每个存储池中生成一定量的数据，其中一部分数据是重复的，另一部分数据是随机的
+String fio_cmd = "fio --name=write --ioengine=libaio --iodepth=32 --rw=write --bs=4k --direct=1 --size=1G --numjobs=1 --runtime=60 --group_reporting";
+fio_cmd += " --filename="; // 添加文件名参数
+fio_cmd += "/mnt/cephfs/file"; // 文件存储池的文件名
+fio_cmd += " --filename="; // 添加文件名参数
+fio_cmd += "/dev/rbd0"; // 块存储池的文件名
+fio_cmd += " --filename="; // 添加文件名参数
+fio_cmd += "rados://object_pool/object"; // 对象存储池的文件名
+Runtime.getRuntime().exec(fio_cmd); // 执行 FIO 命令
+
+// 使用 COSBench 对每个存储池进行读写混合的工作负载，模拟真实的应用场景
+String cosbench_cmd = "cosbench start conf/workload.xml"; // COSBench 的启动命令
+String workload_xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" +
+        "<workload name=\"cosbench\" description=\"cosbench workload\">\n" +
+        "    <storage type=\"ceph\" config=\"mon_host=192.168.1.1;username=admin;key=123456\"/>\n" +
+        "    <workflow>\n" +
+        "        <workstage name=\"prepare\">\n" +
+        "            <work type=\"init\" workers=\"10\" config=\"containers=r(1,100);objects=r(1,1000);sizes=c(1)M\"/>\n" +
+        "        </workstage>\n" +
+        "        <workstage name=\"main\">\n" +
+        "            <work name=\"write\" workers=\"10\" division=\"container\" runtime=\"300\" rampup=\"10\" rampdown=\"10\">\n" +
+        "                <operation type=\"write\" ratio=\"80\" config=\"sizes=c(1)M;objects=r(1,1000)\"/>\n" +
+        "                <operation type=\"read\" ratio=\"20\" config=\"sizes=c(1)M;objects=r(1,1000)\"/>\n" +
+        "            </work>\n" +
+        "        </workstage>\n" +
+        "        <workstage name=\"cleanup\">\n" +
+        "            <work type=\"dispose\" workers=\"10\" config=\"containers=r(1,100);objects=r(1,1000)\"/>\n" +
+        "        </workstage>\n" +
+        "    </workflow>\n" +
+        "</workload>\n"; // COSBench 的工作负载配置文件
+FileWriter fw = new FileWriter("conf/workload.xml");
+fw.write(workload_xml); // 写入配置文件
+fw.close();
+Runtime.getRuntime().exec(cosbench_cmd); // 执行 COSBench 命令
+
+// 记录测试过程中的吞吐量，延迟，IOPS，CPU 利用率，内存占用率，磁盘空间，数据减少率等指标
+Map<String, Object> metrics = new HashMap<>(); // 创建一个映射来存储指标
+metrics.put("throughput", tidedup.getThroughput()); // 获取吞吐量
+metrics.put("latency", tidedup.getLatency()); // 获取延迟
+metrics.put("iops", tidedup.getIops()); // 获取 IOPS
+metrics.put("cpu", tidedup.getCpuUsage()); // 获取 CPU 利用率
+metrics.put("memory", tidedup.getMemoryUsage()); // 获取内存占用率
+metrics.put("disk", tidedup.getDiskUsage()); // 获取磁盘空间
+metrics.put("dedup_ratio", tidedup.getDedupRatio()); // 获取数据减少率
+System.out.println(metrics); // 打印指标
+
+// 关闭所有的对象和连接
+fs.unmount();
+fs.shutdown();
+block_device.close();
+cluster.ioCtxDestroy(file_ioctx);
+cluster.ioCtxDestroy(block_ioctx);
+cluster.ioCtxDestroy(object_ioctx);
+cluster.shutdown();

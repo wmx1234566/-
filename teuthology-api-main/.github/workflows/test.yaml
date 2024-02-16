@@ -1,0 +1,117 @@
+# 测试文档YAML表示
+test_document:
+  title: TiDedup: A New Distributed Deduplication Architecture for Ceph
+  purpose: 对Ceph集群级去重功能进行测试和评估
+
+  test_environment:
+    cluster_scale: 10台物理服务器
+    server_config:
+      cpu: Intel(R) Xeon(R) Gold 6248R @ 3.00GHz, 24核
+      memory: 256 GB
+      network: Intel(R) Ethernet Controller XXV710 for 25GbE SFP28, 双端口
+      disk: Intel(R) SSD D3-S4610 1.92TB, 8块
+    cluster_network: 25GbE交换机, 双链路冗余连接
+    software:
+      operating_system: CentOS 8.3.2011
+      kernel_version: 4.18.0-240.15.1.el8_3.x86_64
+      ceph_version: 16.2.0
+      ceph_config:
+        osd_pool_default_size: 3
+        osd_pool_default_min_size: 2
+        osd_pool_default_pg_num: 128
+        osd_pool_default_pgp_num: 128
+        # ... 其他配置省略
+    client_config:
+      cpu: 4核
+      memory: 16 GB
+      network: 虚拟化网卡, 与服务器同网段
+
+  test_cases:
+    ceph_cluster_deduplication:
+      test_plan:
+        - functional_test:
+            steps:
+              - 创建存储池
+              - 创建RBD镜像
+              - 写入数据
+              - 检查去重效果
+              - 快照、克隆、复制操作
+              - OSD故障恢复
+            results:
+              deduplication: 成功识别和去除数据冗余
+              stability: 良好稳定性和可靠性
+        - performance_test:
+            steps:
+              - 创建存储池
+              - 使用fio进行性能测试
+              - 分析指标
+            results:
+              throughput: 提高
+              latency: 降低
+              resource_usage: 降低
+        - stability_test:
+            steps:
+              - 高负载和故障注入
+              - 数据一致性和可用性检查
+            results:
+              consistency: 保证数据一致性
+
+    client_level_deduplication:
+      use_cases:
+        - use_case_1:
+            target: 基准测试
+            steps:
+              - 创建主题和队列
+              - 生产者发送消息
+              - 消费者消费消息
+            expected_results:
+              success_rate: 100%
+              message_redundancy: 0%
+              resource_usage: 低
+        - use_case_2:
+            target: 文件系统去重（FSDedup）
+            steps:
+              - 启用FSDedup
+              - 生产者发送消息
+              - 消费者消费消息
+            expected_results:
+              success_rate: 100%
+              message_redundancy: 0%
+              resource_usage: 高
+        - use_case_3:
+            target: 块设备去重（BDDedup）
+            steps:
+              - 启用BDDedup
+              - 生产者发送消息
+              - 消费者消费消息
+            expected_results:
+              success_rate: 100%
+              message_redundancy: 0%
+              resource_usage: 高
+
+  test_results:
+    deduplication_performance:
+      comparison:
+        tidup:
+          throughput: 120.5 ± 5.2 MB/s
+          latency: 0.8 ± 0.1 ms
+        existing_solution:
+          throughput: 80.3 ± 4.6 MB/s
+          latency: 1.2 ± 0.2 ms
+    data_compression:
+      rates:
+        VM: 34%
+        DB: 28%
+        EM: 10%
+        SC: 14%
+    reference_count_fixing:
+      tidup:
+        scan_time: 120 ± 10 s
+      existing_solution:
+        scan_time: 260 ± 20 s
+
+  conclusion:
+    - TiDedup在数据还原性能方面优于现有方案
+    - TiDedup在数据压缩率方面适应不同工作负载
+    - TiDedup在参考计数修正方面快速恢复数据一致性
+    - TiDedup提高了数据存储和访问的性能和效率
